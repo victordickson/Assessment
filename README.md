@@ -1,116 +1,96 @@
-# Monolith to Microservices
-
-## NOTE: This is not an officially supported Google product
-
-## Introduction
-
-### This project is used by the Google Cloud Platform team to demonstrate different services within Google Cloud. This project contains two versions of the same application, one architected as a monolith and the other as a set of microservices
-
 ## Setup
 
-### **NOTE:** Make sure you have a newer version of NodeJS (16.13.0) or newer (in Cloud Shell you can run `nvm install --lts`)
+### **NOTE:** You will need a gcloud account to run this.
 
 ```bash
-git clone https://github.com/googlecodelabs/monolith-to-microservices
-cd monolith-to-microservices
+git clone https://github.com/victordickson/assessment
+
+cd assessment
+
+sudo chmod +x setup.sh
+
 ./setup.sh
+
+gcloud services enable container.googleapis.com
+
+gcloud container clusters create fancy-cluster --num-nodes 2
+
+sudo chmod +x deploy-monolith.sh
+
+./deploy-monolith.sh
+
+export GOOGLE_CLOUD_PROJECT=<project-id>
+
+cd ~/microservices/src/orders
+
+gcloud builds submit --tag gcr.io/${GOOGLE_CLOUD_PROJECT}/orders:1.0.0 .
+
+kubectl create deployment orders --image=gcr.io/${GOOGLE_CLOUD_PROJECT}/orders:1.0.0
+
+kubectl expose deployment orders --type=LoadBalancer --port 80 --target-port 8081
+
+cd ~/microservices/src/products
+
+gcloud builds submit --tag gcr.io/${GOOGLE_CLOUD_PROJECT}/products:1.0.0 .
+
+kubectl create deployment products --image=gcr.io/${GOOGLE_CLOUD_PROJECT}/products:1.0.0
+
+kubectl expose deployment products --type=LoadBalancer --port 80 --target-port 8082
 ```
-
-## Monolith
-
-### To run the monolith project use the following commands from the top level directory
-
-```bash
-cd monolith
-npm start
-```
-
-You should see output similar to the following
-
+### Get public ips of product and order services
 ```text
-Monolith listening on port 8080!
+kubectl get service 
 ```
-
-#### That's it! You now have a perfectly functioning monolith running on your machine
-
-### Docker - Monolith
-
-#### To create a Docker image for the monolith, execute the following commands
-
+### Replace Order and Product IP address and reconfigure monolith
 ```bash
-cd monolith
-docker build -t monolith:1.0.0 .
+cd ~/monolith-to-microservices/react-app
+
+vim .env.monolith
+
+REACT_APP_ORDERS_URL=http://<ORDERS_IP_ADDRESS>/api/orders
+REACT_APP_PRODUCTS_URL=http://<PRODUCTS_IP_ADDRESS>/api/products
+
+npm run build:monolith
+
+cd ~/monolith
+
+gcloud builds submit --tag gcr.io/${GOOGLE_CLOUD_PROJECT}/monolith:1.0.0 .
+
+kubectl set image deployment/monolith monolith=gcr.io/${GOOGLE_CLOUD_PROJECT}/monolith:1.0.0
 ```
 
-To run the Docker image, execute the following commands
-
+## Migrate frontend to microservice
 ```bash
-docker run --rm -p 8080:8080 monolith:1.0.0
+cd ~/react-app
+
+cp .env.monolith .env
+
+cd ~/microservices/src/frontend
+
+gcloud builds submit --tag gcr.io/${GOOGLE_CLOUD_PROJECT}/frontend:1.0.0 .
+
+kubectl create deployment frontend --image=gcr.io/${GOOGLE_CLOUD_PROJECT}/frontend:1.0.0
+
+kubectl expose deployment frontend --type=LoadBalancer --port 80 --target-port 8080
 ```
-
-## Microservices
-
-### To run the microservices project use the following commands from the top level directory
-
-```bash
-cd microservices
-npm start
-```
-
-You should see output similar to the following
-
+### Test the microservice
 ```text
-[0] Frontend microservice listening on port 8080!
-[2] Orders microservice listening on port 8081!
-[1] Products microservice listening on port 8082!
+kubectl get service frontend
 ```
-
-### That's it! You now have a perfectly functioning set of microservices running on your machine
-
-### Docker - Microservices
-
-### To create a Docker image for the microservices, you will have to create a Docker image for each service. Execute the following commands for each folder under the microservices folder
-
+## Implement Monitoring using Prometheus 
 ```bash
-cd microservices/src/frontend
-docker build -t frontend:1.0.0 .
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 
-cd ../products
-docker build -t products:1.0.0 .
+helm repo update
 
-cd ../orders
-docker build -t orders:1.0.0 .
+kubectl create -n monitoring
+
+helm install monitoring prometheus-community/kube-prometheus-stack -n monitoring
+
+kubectl get all -n monitoring
 ```
-
-To run the Docker image, execute the following commands
-
-```bash
-docker run -d --rm -p 8080:8080 monolith:1.0.0
-docker run -d --rm -p 8081:8081 orders:1.0.0
-docker run -d --rm -p 8082:8082 products:1.0.0
+### Visualise with grafana dashboard
+```text
+kubectl port-forward service/monitoring-grafana 8080:80 -n monitoring
 ```
-
-#### To stop the containers, you will need to find the CONTAINER ID for each and stop them individually. See the steps below
-
-```bash
-docker ps -a
-
-CONTAINER ID        IMAGE                        COMMAND                CREATED
-4c01db0b339c        frontend:1.0.0               bash                   17 seconds ago
-d7886598dbe2        orders:1.0.0                 bash                   17 seconds ago
-d85756f57265        products:1.0.0               bash                   17 seconds ago
-
-docker stop 4c01db0b339c
-docker stop d7886598dbe2
-docker stop d85756f57265
-```
-
-## React App
-
-### The react-app folder contains a React application created from `create-react-app`. You can modify this fronted, but afterwards, you will need to build and move the static files to the monolith and microservices project. You can do this by running the standard create-react-app build command below
-
-```bash
-npm run build
-```
-
-#### This will run the build script to create the static files two times. The first will build with relative URLs and copy the static files to the monolith/public folder. The second run will build with the standard microservices URLs and copy the static files to the microservices/src/frontend/public folder
+### Default credentials; Username: admin , Password: prom-operator
